@@ -136,6 +136,10 @@ impl VpSpawner {
                     .await
             }
             #[cfg(guest_arch = "aarch64")]
+            virt::IsolationType::Cca => {
+                self.run_backed_vp::<virt_mshv_vtl::CcaBacked>(saved_state, control, save_on_cancel)
+                    .await
+            }
             _ => unimplemented!(),
         };
         match r {

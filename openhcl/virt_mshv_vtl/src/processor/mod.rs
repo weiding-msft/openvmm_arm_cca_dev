@@ -14,7 +14,6 @@ cfg_if::cfg_if! {
         pub mod snp;
         pub mod tdx;
 
-        use crate::TlbFlushLockAccess;
         use crate::VtlCrash;
         use bitvec::prelude::BitArray;
         use bitvec::prelude::Lsb0;
@@ -25,7 +24,9 @@ cfg_if::cfg_if! {
         use virt_support_x86emu::translate::TranslationRegisters;
         use virt::vp::AccessVpState;
     } else if #[cfg(guest_arch = "aarch64")] {
+        pub mod cca;
         use hv1_hypercall::Arm64RegisterState;
+        use virt_support_aarch64emu::translate::TranslationRegisters;
         use hvdef::HvArm64RegisterName;
     } else {
         compile_error!("unsupported guest architecture");
@@ -36,6 +37,7 @@ use super::Error;
 use super::UhPartitionInner;
 use super::UhVpInner;
 use crate::GuestVtl;
+use crate::TlbFlushLockAccess;
 use crate::WakeReason;
 use hcl::ioctl::ProcessorRunner;
 use hv1_emulator::message_queues::MessageQueues;
@@ -270,7 +272,6 @@ pub(crate) struct BackingSharedParams {
 }
 
 /// Trait for processor backings that have hardware isolation support.
-#[cfg(guest_arch = "x86_64")]
 trait HardwareIsolatedBacking: Backing {
     /// Gets CVM specific VP state.
     fn cvm_state(&self) -> &crate::UhCvmVpState;

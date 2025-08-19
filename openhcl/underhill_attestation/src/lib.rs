@@ -221,6 +221,8 @@ pub enum AttestationType {
     Tdx,
     /// Use trusted host-based attestation.
     Host,
+    /// Use Arm CCA for attestation.
+    Cca,
 }
 
 /// If required, attest platform. Gets VMGS datastore key.
@@ -268,6 +270,7 @@ pub async fn initialize_platform_security(
     let tee_call: Option<Box<dyn TeeCall>> = match attestation_type {
         AttestationType::Snp => Some(Box::new(tee_call::SnpCall)),
         AttestationType::Tdx => Some(Box::new(tee_call::TdxCall)),
+        AttestationType::Cca => Some(Box::new(tee_call::CcaCall)),
         AttestationType::Host => None,
     };
 

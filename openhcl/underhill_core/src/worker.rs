@@ -1585,6 +1585,7 @@ async fn new_underhill_vm(
             // TODO VBS: Support VBS attestation
             AttestationType::Host
         }
+        virt::IsolationType::Cca => AttestationType::Cca,
     };
 
     // Decrypt VMGS state before the VMGS file is used for anything.

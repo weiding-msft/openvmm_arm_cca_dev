@@ -6,6 +6,7 @@
 //!
 //! This is used to test the underlying VMM infrastructure without the complexity
 //! of the full OpenVMM stack.
+#![expect(unsafe_code)]
 
 mod host_vmm;
 mod load;
@@ -76,6 +77,9 @@ enum HypervisorOpt {
     /// Use Hypervisor.Framework to run the TMK.
     #[cfg(target_os = "macos")]
     Hvf,
+    /// Use mshv-vtl to run the TMK inside a CCA realm.
+    #[cfg(all(target_os = "linux", guest_arch = "aarch64"))]
+    Cca,
 }
 
 async fn do_main(driver: DefaultDriver) -> anyhow::Result<()> {
@@ -90,6 +94,8 @@ async fn do_main(driver: DefaultDriver) -> anyhow::Result<()> {
         HypervisorOpt::Mshv => state.run_host_vmm(virt_mshv::LinuxMshv).await,
         #[cfg(target_os = "linux")]
         HypervisorOpt::MshvVtl => state.run_paravisor_vmm(virt::IsolationType::None).await,
+        #[cfg(all(target_os = "linux", guest_arch = "aarch64"))]
+        HypervisorOpt::Cca => state.run_paravisor_vmm(virt::IsolationType::Cca).await,
         #[cfg(windows)]
         HypervisorOpt::Whp => state.run_host_vmm(virt_whp::Whp).await,
         #[cfg(target_os = "macos")]

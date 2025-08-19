@@ -7,6 +7,8 @@
 
 use super::synic::GlobalSynic;
 use super::synic::ProcessorSynic;
+#[cfg(guest_arch = "aarch64")]
+use aarch64defs::Vendor;
 use guestmem::GuestMemory;
 use guestmem::GuestMemoryError;
 use hv1_structs::VtlArray;
@@ -24,6 +26,7 @@ use std::sync::Arc;
 use virt::x86::MsrError;
 use vm_topology::processor::VpIndex;
 use vmcore::reference_time_source::ReferenceTimeSource;
+#[cfg(guest_arch = "x86_64")]
 use x86defs::cpuid::Vendor;
 use zerocopy::FromZeros;
 

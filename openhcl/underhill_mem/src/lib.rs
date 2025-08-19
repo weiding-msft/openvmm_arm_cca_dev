@@ -37,6 +37,7 @@ use mapping::GuestMemoryMapping;
 use memory_range::MemoryRange;
 use parking_lot::Mutex;
 use registrar::RegisterMemory;
+use rsi::CcaMemPermIndex;
 use std::sync::Arc;
 use thiserror::Error;
 use virt::IsolationType;
@@ -112,6 +113,9 @@ enum GpaVtlPermissions {
     Vbs(HvMapGpaFlags),
     Snp(SevRmpAdjust),
     Tdx((TdgMemPageGpaAttr, TdgMemPageAttrWriteR8)),
+    // TODO: CCA: we need to use the 'vtl' and 'protections' below to get the correct index
+    // This implies that we've set up the index list properly, and we just select the right one here
+    Cca(CcaMemPermIndex),
 }
 
 impl GpaVtlPermissions {
@@ -129,6 +133,11 @@ impl GpaVtlPermissions {
                     TdgMemPageGpaAttr::new(),
                     TdgMemPageAttrWriteR8::new(),
                 ));
+                vtl_permissions.set(vtl, protections);
+                vtl_permissions
+            }
+            IsolationType::Cca => {
+                let mut vtl_permissions = GpaVtlPermissions::Cca(CcaMemPermIndex::default());
                 vtl_permissions.set(vtl, protections);
                 vtl_permissions
             }
@@ -174,6 +183,9 @@ impl GpaVtlPermissions {
 
                 *attributes = new_attributes;
                 *mask = new_mask;
+            }
+            GpaVtlPermissions::Cca(_index) => {
+                // TODO: CCA: implement me!
             }
         }
     }
@@ -234,6 +246,10 @@ impl MemoryAcceptor {
                     .tdx_accept_pages(range, Some((attributes, mask)))
                     .map_err(|err| AcceptPagesError::Tdx { error: err, range })
             }
+            IsolationType::Cca => {
+                // TODO: CCA: do we need to set RIPAS here?
+                Ok(())
+            }
         }
     }
 
@@ -249,6 +265,9 @@ impl MemoryAcceptor {
                 .expect("pvalidate should not fail"),
             IsolationType::Tdx => {
                 // Nothing to do for TDX.
+            }
+            IsolationType::Cca => {
+                // TODO: CCA: anything to do here?
             }
         }
     }
@@ -297,6 +316,8 @@ impl MemoryAcceptor {
                 Ok(GpaVtlPermissions::Snp(rmpadjust))
             }
             IsolationType::Tdx => todo!(),
+            // TODO: CCA: implement me!
+            IsolationType::Cca => todo!(),
         }
     }
 
@@ -350,6 +371,13 @@ impl MemoryAcceptor {
                         permissions: attributes,
                         vtl: vtl.into(),
                     })
+            }
+            GpaVtlPermissions::Cca(_index) => {
+                // TODO: CCA: call new ioctl to set perms index
+                // TODO: CCA: next
+                todo!(
+                    "Apply CCA permissions for vtl {vtl:?} on range {range:?} with index {_index:?}"
+                );
             }
         }
     }
@@ -800,6 +828,9 @@ impl ProtectIsolatedMemory for HardwareIsolatedMemoryProtector {
                 // guest memory.
 
                 GpaVtlPermissions::new(IsolationType::Tdx, vtl, HV_MAP_GPA_PERMISSIONS_ALL)
+            }
+            IsolationType::Cca => {
+                GpaVtlPermissions::new(IsolationType::Cca, vtl, HV_MAP_GPA_PERMISSIONS_ALL)
             }
         };
 

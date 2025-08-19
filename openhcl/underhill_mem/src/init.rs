@@ -99,6 +99,9 @@ pub async fn init(params: &Init<'_>) -> anyhow::Result<MemoryMappings> {
 
     if let Some(boot_init) = &params.boot_init {
         if !params.isolation.is_isolated() {
+            // CCA: note, this isn't needed because we start with lower VTLs unable
+            //      to access anything.
+
             // TODO: VTL 2 protections are applied in the boot shim for isolated
             // VMs. Since non-isolated VMs can undergo servicing and this is an
             // expensive operation, continue to apply protections here for now. In
@@ -243,7 +246,7 @@ pub async fn init(params: &Init<'_>) -> anyhow::Result<MemoryMappings> {
                 // accessors, or something.
                 0
             }
-            IsolationType::Snp => {
+            IsolationType::Snp | IsolationType::Cca => {
                 // SNP has two mappings for each shared page: one below and one
                 // above VTOM. So, unlike for TDX, for SNP we could choose to
                 // register memory twice, allowing the kernel to operate on

@@ -89,6 +89,7 @@ pipette_protocol = { path = "petri/pipette_protocol" }
 # support crates
 arc_cyclic_builder = { path = "support/arc_cyclic_builder" }
 cache_topology = { path = "support/cache_topology" }
+cca_guest_device = { path = "support/cca_guest_device" }
 closeable_mutex = { path = "support/closeable_mutex" }
 ci_logger = { path = "support/ci_logger" }
 clap_dyn_complete = { path = "support/clap_dyn_complete" }
@@ -181,6 +182,7 @@ tmk_protocol = { path = "tmk/tmk_protocol" }
 
 aarch64defs = { path = "vm/aarch64/aarch64defs" }
 aarch64emu = { path = "vm/aarch64/aarch64emu" }
+rsi = { path = "vm/aarch64/rsi" }
 acpi = { path = "vm/acpi" }
 acpi_spec = { path = "vm/acpi_spec" }
 block_crypto = { path = "vm/devices/storage/block_crypto" }

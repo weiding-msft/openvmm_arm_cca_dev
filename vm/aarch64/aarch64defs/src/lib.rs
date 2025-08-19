@@ -5,9 +5,13 @@
 
 #![expect(missing_docs)]
 #![no_std]
+//! UNSAFETY: Diving into assembly
+#![expect(unsafe_code)]
 
 pub mod gic;
 pub mod psci;
+
+use core::fmt::Display;
 
 use bitfield_struct::bitfield;
 use open_enum::open_enum;
@@ -67,6 +71,27 @@ pub struct EsrEl2 {
     pub iss2: u8,
     #[bits(27)]
     _rsvd: u32,
+}
+
+impl EsrEl2 {
+    pub fn is_write(&self) -> bool {
+        // The WNR bit is set for writes, not reads.
+        (self.0 & (1 << 6)) != 0
+    }
+
+    pub fn is_read(&self) -> bool {
+        // The WNR bit is set for writes, not reads.
+        (self.0 & (1 << 6)) == 0
+    }
+
+    pub fn srt(&self) -> u8 {
+        // The SRT field is only valid for data aborts.
+        if (ExceptionClass::DATA_ABORT_LOWER.0..ExceptionClass::DATA_ABORT.0).contains(&self.ec()) {
+            ((self.iss() & (0x1f << 16)) >> 16) as u8
+        } else {
+            0
+        }
+    }
 }
 
 /// aarch64 SCTRL_EL1
@@ -372,11 +397,12 @@ impl IssSystem {
     }
 }
 
+// TODO: CCA: Why is the reserved field there?
 #[bitfield(u32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SystemRegEncoding {
-    #[bits(5)]
-    _rsvd: u32,
+    // #[bits(5)]
+    // _rsvd: u32,
     #[bits(3)]
     pub op2: u8,
     #[bits(4)]
@@ -387,7 +413,7 @@ pub struct SystemRegEncoding {
     pub op1: u8,
     #[bits(2)]
     pub op0: u8,
-    #[bits(11)]
+    #[bits(16)]
     _rsvd2: u32,
 }
 
@@ -837,3 +863,38 @@ pub const GIC_DISTRIBUTOR_SIZE: u64 = 0x1_0000;
 pub const GIC_REDISTRIBUTOR_FRAME_SIZE: u64 = 0x1_0000;
 pub const GIC_SGI_FRAME_SIZE: u64 = 0x1_0000;
 pub const GIC_REDISTRIBUTOR_SIZE: u64 = GIC_REDISTRIBUTOR_FRAME_SIZE + GIC_SGI_FRAME_SIZE;
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub struct Vendor(pub [u8; 12]);
+
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for Vendor {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        // 25% of the time generate a random vendor
+        if u.ratio(1, 4)? {
+            Ok(Self(u.arbitrary()?))
+        } else {
+            Ok(*u.choose(&[Self::INTEL, Self::AMD, Self::HYGON])?)
+        }
+    }
+}
+
+impl Vendor {
+    pub fn is_intel_compatible(&self) -> bool {
+        false
+    }
+
+    pub fn is_amd_compatible(&self) -> bool {
+        false
+    }
+}
+
+impl Display for Vendor {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if let Ok(s) = core::str::from_utf8(&self.0) {
+            f.pad(s)
+        } else {
+            core::fmt::Debug::fmt(&self.0, f)
+        }
+    }
+}
