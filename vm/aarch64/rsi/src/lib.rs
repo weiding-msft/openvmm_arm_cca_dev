@@ -9,46 +9,30 @@
 //!
 //! # Architecture
 //!
-//! ```
-//! ┌─────────────────────────────────────┐
-//! │     High-level RSI Operations       │
-//! │  (rsi_version, rsi_realm_config)    │
-//! └────────────┬────────────────────────┘
-//!              │
-//! ┌────────────▼────────────────────────┐
-//! │       RsiClient Trait               │
-//! │  (Abstraction for RSI calls)        │
-//! └────────────┬────────────────────────┘
-//!              │
-//!       ┌──────┴──────┐
-//!       │             │
-//! ┌─────▼─────┐ ┌────▼──────┐
-//! │  Kernel   │ │   Mock    │
-//! │  Driver   │ │  Client   │
-//! └───────────┘ └───────────┘
-//! ```
-
-// | Command Name          | Full SMC ID    | Function Number |
-// |-----------------------|----------------|-----------------|
-// | RSI_VERSION           | 0xC400_0190    | 0x190          |
-// | RSI_FEATURES          | 0xC400_0191    | 0x191          |
-// | RSI_REALM_CONFIG      | 0xC400_0196    | 0x196          |
-// | RSI_IPA_STATE_SET     | 0xC400_0197    | 0x197          |
-// | RSI_HOST_CALL         | 0xC400_0199    | 0x199          |
-// | RSI_MEM_GET_PERM_VALUE| 0xC400_01A0    | 0x1A0          |
-// | RSI_MEM_SET_PERM_INDEX| 0xC400_01A1    | 0x1A1          |
-// | RSI_MEM_SET_PERM_VALUE| 0xC400_01A2    | 0x1A2          |
-// | RSI_PLANE_ENTER       | 0xC400_01A3    | 0x1A3          |
-// | RSI_PLANE_SYSREG_READ | 0xC400_01AE    | 0x1AE          |
-// | RSI_PLANE_SYSREG_WRITE| 0xC400_01AF    | 0x1AF          |
+//! High-level operations (for example `rsi_version` and `rsi_realm_config`)
+//! are built on top of the `RsiClient` trait, which can be implemented by
+//! kernel-backed and mock clients.
+//!
+//! # Command Summary
+//!
+//! | Command Name            | Full SMC ID | Function Number |
+//! |-------------------------|-------------|-----------------|
+//! | `RSI_VERSION`           | `0xC400_0190` | `0x190` |
+//! | `RSI_FEATURES`          | `0xC400_0191` | `0x191` |
+//! | `RSI_REALM_CONFIG`      | `0xC400_0196` | `0x196` |
+//! | `RSI_IPA_STATE_SET`     | `0xC400_0197` | `0x197` |
+//! | `RSI_HOST_CALL`         | `0xC400_0199` | `0x199` |
+//! | `RSI_MEM_GET_PERM_VALUE`| `0xC400_01A0` | `0x1A0` |
+//! | `RSI_MEM_SET_PERM_INDEX`| `0xC400_01A1` | `0x1A1` |
+//! | `RSI_MEM_SET_PERM_VALUE`| `0xC400_01A2` | `0x1A2` |
+//! | `RSI_PLANE_ENTER`       | `0xC400_01A3` | `0x1A3` |
+//! | `RSI_PLANE_SYSREG_READ` | `0xC400_01AE` | `0x1AE` |
+//! | `RSI_PLANE_SYSREG_WRITE`| `0xC400_01AF` | `0x1AF` |
 
 
 
 #![no_std]
 
-extern crate alloc;
-
-use alloc::boxed::Box;
 use core::fmt;
 use bitfield_struct::bitfield;
 use open_enum::open_enum;
@@ -358,7 +342,9 @@ impl RealmConfig {
 #[repr(u64)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashAlgorithm {
+    /// SHA-256 hashing algorithm.
     Sha256 = 0,
+    /// SHA-512 hashing algorithm.
     Sha512 = 1,
 }
 
@@ -533,7 +519,6 @@ pub fn rsi_mem_set_perm_index(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec::Vec;
     use core::sync::atomic::{AtomicU64, Ordering};
 
     /// Mock RSI client for testing
