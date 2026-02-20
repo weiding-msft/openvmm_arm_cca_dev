@@ -14,6 +14,84 @@ use zerocopy::Immutable;
 use zerocopy::IntoBytes;
 use zerocopy::KnownLayout;
 
+open_enum::open_enum! {
+    /// Exit reasons returned by `RSI_PLANE_ENTER`.
+    pub enum cca_rsi_plane_exit_reason: u64 {
+        /// Synchronous exit (for example, exception handling).
+        SYNC = 0,
+        /// IRQ exit.
+        IRQ = 1,
+        /// FIQ exit.
+        FIQ = 2,
+    }
+}
+
+/// Input structure consumed by `RSI_PLANE_ENTER`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct cca_rsi_plane_entry {
+    /// Control flags for entry behavior.
+    pub flags: u64,
+    /// Program counter for lower-plane entry/resume.
+    pub pc: u64,
+    /// Lower-plane general purpose registers (X0..X30).
+    pub gprs: [u64; 31],
+    /// GICv3 virtual hypervisor control register.
+    pub gicv3_hcr: u64,
+    /// GICv3 list registers.
+    pub gicv3_lrs: [u64; 16],
+}
+
+/// Output structure populated by `RSI_PLANE_ENTER`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct cca_rsi_plane_exit {
+    /// Reason for exit from lower plane.
+    pub exit_reason: u64,
+    /// Exception syndrome register value.
+    pub esr_el2: u64,
+    /// Fault address register value.
+    pub far_el2: u64,
+    /// IPA fault address register value.
+    pub hpfar_el2: u64,
+    /// Lower-plane general purpose registers (X0..X30) at exit.
+    pub gprs: [u64; 31],
+    /// GICv3 virtual hypervisor control register at exit.
+    pub gicv3_hcr: u64,
+    /// GICv3 list registers at exit.
+    pub gicv3_lrs: [u64; 16],
+    /// GICv3 maintenance interrupt status register at exit.
+    pub gicv3_misr: u64,
+    /// GICv3 virtual machine control register at exit.
+    pub gicv3_vmcr: u64,
+}
+
+impl cca_rsi_plane_exit {
+    /// Returns the decoded exit reason.
+    pub fn reason(&self) -> cca_rsi_plane_exit_reason {
+        cca_rsi_plane_exit_reason(self.exit_reason)
+    }
+
+    /// Returns the ESR exception class field (`ESR_EL2[31:26]`).
+    pub fn esr_el2_exception_class(&self) -> u8 {
+        ((self.esr_el2 >> 26) & 0x3f) as u8
+    }
+}
+
+/// Shared run structure for CCA plane transitions.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct cca_rsi_plane_run {
+    /// Entry payload passed into `RSI_PLANE_ENTER`.
+    pub entry: cca_rsi_plane_entry,
+    /// Exit payload returned by `RSI_PLANE_ENTER`.
+    pub exit: cca_rsi_plane_exit,
+}
+
+const _: () = assert!(size_of::<cca_rsi_plane_entry>() == 400);
+const _: () = assert!(size_of::<cca_rsi_plane_exit>() == 432);
+const _: () = assert!(size_of::<cca_rsi_plane_run>() == 832);
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct hcl_translate_address_info {
@@ -307,4 +385,50 @@ pub struct hcl_kick_cpus {
     pub len: u64,
     pub cpu_mask: *const u8,
     pub flags: hcl_kick_cpus_flags,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cca_layout_sizes_match_expected_abi() {
+        assert_eq!(size_of::<cca_rsi_plane_entry>(), 400);
+        assert_eq!(size_of::<cca_rsi_plane_exit>(), 432);
+        assert_eq!(size_of::<cca_rsi_plane_run>(), 832);
+    }
+
+    #[test]
+    fn cca_layout_offsets_match_expected_abi() {
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_entry, flags), 0);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_entry, pc), 8);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_entry, gprs), 16);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_entry, gicv3_hcr), 264);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_entry, gicv3_lrs), 272);
+
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_exit, exit_reason), 0);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_exit, esr_el2), 8);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_exit, far_el2), 16);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_exit, hpfar_el2), 24);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_exit, gprs), 32);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_exit, gicv3_hcr), 280);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_exit, gicv3_lrs), 288);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_exit, gicv3_misr), 416);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_exit, gicv3_vmcr), 424);
+
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_run, entry), 0);
+        assert_eq!(core::mem::offset_of!(cca_rsi_plane_run, exit), 400);
+    }
+
+    #[test]
+    fn cca_decodes_exit_reason_and_exception_class() {
+        let exit = cca_rsi_plane_exit {
+            exit_reason: cca_rsi_plane_exit_reason::SYNC.0,
+            esr_el2: (0x24u64) << 26,
+            ..Default::default()
+        };
+
+        assert_eq!(exit.reason(), cca_rsi_plane_exit_reason::SYNC);
+        assert_eq!(exit.esr_el2_exception_class(), 0x24);
+    }
 }

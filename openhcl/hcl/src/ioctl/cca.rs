@@ -16,11 +16,11 @@ const MSHV_RSI_CALL: u8 = 0x3a;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct MshvRsiCall {
-    vp_index: u32,
-    command: u32,
-    args: [u64; 7],
-    results: [u64; 7],
-    return_code: i32,
+    vp_index: u32,  // which virtual processor (vCPU) to target
+    command: u32,   // RSI command ID
+    args: [u64; 7], // RSI command arguments
+    results: [u64; 7], // kernel fills up to command results
+    return_code: i32, // kernel fills RSI command return code
 }
 
 mod ioctls {
