@@ -7,6 +7,7 @@ mod deferred;
 pub mod register;
 
 pub mod aarch64;
+pub mod cca;
 pub mod snp;
 pub mod tdx;
 pub mod x64;

@@ -2926,6 +2926,7 @@ dependencies = [
  "open_enum",
  "pal",
  "parking_lot",
+ "rsi",
  "safe_intrinsics",
  "sidecar_client",
  "signal-hook",
