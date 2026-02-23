@@ -9,6 +9,7 @@ use rsi::RsiInput;
 use rsi::RsiOutput;
 use rsi::RsiReturnCode;
 use std::os::fd::RawFd;
+use thiserror::Error;
 
 const MSHV_IOCTL: u8 = 0xb8;
 const MSHV_RSI_CALL: u8 = 0x3a;
@@ -70,6 +71,7 @@ impl KernelRsiClient {
         }
     }
 
+    #[cfg(test)]
     fn with_backend(fd: RawFd, vp_index: u32, backend: Box<dyn RsiIoctlBackend>) -> Self {
         Self {
             fd,
@@ -101,6 +103,31 @@ impl RsiClient for KernelRsiClient {
             results: payload.results,
         })
     }
+}
+
+/// Resolved CCA realm configuration used by callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RealmConfig {
+    /// Realm IPA width in bits.
+    pub ipa_width: u8,
+}
+
+/// Errors from querying CCA realm configuration.
+#[derive(Debug, Error)]
+pub enum CcaQueryError {
+    /// RSI REALM_CONFIG returned an error.
+    #[error("RSI REALM_CONFIG failed: {0}")]
+    Rsi(RsiError),
+}
+
+/// Query RSI REALM_CONFIG through the kernel RSI adapter.
+pub fn query_realm_config(fd: RawFd, vp_index: u32) -> Result<RealmConfig, CcaQueryError> {
+    let client = KernelRsiClient::new(fd, vp_index);
+    let config = rsi::rsi_realm_config(&client).map_err(CcaQueryError::Rsi)?;
+
+    Ok(RealmConfig {
+        ipa_width: config.ipa_width,
+    })
 }
 
 #[cfg(test)]

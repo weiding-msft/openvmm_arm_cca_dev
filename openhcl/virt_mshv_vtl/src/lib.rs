@@ -180,6 +180,12 @@ pub enum Error {
     GetReg(#[source] hcl::ioctl::register::GetRegError),
     #[error("failed to set register")]
     SetReg(#[source] hcl::ioctl::register::SetRegError),
+    #[cfg(guest_arch = "aarch64")]
+    #[error("failed to query CCA realm config")]
+    CcaRealmConfig(#[source] hcl::ioctl::cca::CcaQueryError),
+    #[cfg(guest_arch = "aarch64")]
+    #[error("invalid CCA IPA width {0}")]
+    InvalidCcaIpaWidth(u8),
 }
 
 /// Error revoking guest VSM.
@@ -218,6 +224,8 @@ struct UhPartitionInner {
     enter_modes_atomic: AtomicU8,
     #[cfg(guest_arch = "x86_64")]
     cpuid: virt::CpuidLeafSet,
+    #[cfg(guest_arch = "aarch64")]
+    cca_init: Option<CcaInitState>,
     lower_vtl_memory_layout: MemoryLayout,
     gm: VtlArray<GuestMemory, 2>,
     vtl0_kernel_exec_gm: GuestMemory,
@@ -309,6 +317,14 @@ struct EnterModes {
     first: EnterMode,
     #[inspect(mut)]
     second: EnterMode,
+}
+
+#[cfg(guest_arch = "aarch64")]
+#[derive(Debug, Copy, Clone, Inspect)]
+struct CcaInitState {
+    ipa_width: u8,
+    #[inspect(hex)]
+    vtom: u64,
 }
 
 impl Default for EnterModes {
@@ -1573,6 +1589,8 @@ pub trait TlbFlushLockAccess {
 pub struct UhProtoPartition<'a> {
     params: UhPartitionNewParams<'a>,
     hcl: Hcl,
+    #[cfg(guest_arch = "aarch64")]
+    cca_init: Option<CcaInitState>,
     guest_vsm_available: bool,
     create_partition_available: bool,
     #[cfg(guest_arch = "x86_64")]
@@ -1580,6 +1598,19 @@ pub struct UhProtoPartition<'a> {
 }
 
 impl<'a> UhProtoPartition<'a> {
+    fn vtom_from_ipa_width(ipa_width: u8) -> Option<u64> {
+        if !(1..=63).contains(&ipa_width) {
+            return None;
+        }
+
+        Some(1u64 << (ipa_width - 1))
+    }
+
+    #[cfg(guest_arch = "aarch64")]
+    fn derive_cca_vtom(ipa_width: u8) -> Result<u64, Error> {
+        Self::vtom_from_ipa_width(ipa_width).ok_or(Error::InvalidCcaIpaWidth(ipa_width))
+    }
+
     /// Creates a new prototype partition.
     ///
     /// `driver(cpu)` returns the driver to use for polling the sidecar device
@@ -1588,6 +1619,10 @@ impl<'a> UhProtoPartition<'a> {
         params: UhPartitionNewParams<'a>,
         driver: impl FnMut(u32) -> T,
     ) -> Result<Self, Error> {
+        #[cfg(guest_arch = "aarch64")]
+        let mut params = params;
+        #[cfg(not(guest_arch = "aarch64"))]
+        let params = params;
         let hcl_isolation = match params.isolation {
             IsolationType::None => hcl::ioctl::IsolationType::None,
             IsolationType::Vbs => hcl::ioctl::IsolationType::Vbs,
@@ -1641,6 +1676,20 @@ impl<'a> UhProtoPartition<'a> {
             .map_err(Error::GetReg)?;
         let guest_vsm_available = Self::check_guest_vsm_support(privs, &hcl)?;
 
+        #[cfg(guest_arch = "aarch64")]
+        let cca_init = if params.isolation.is_hardware_isolated() {
+            let realm = hcl.cca_realm_config(0).map_err(Error::CcaRealmConfig)?;
+            let vtom = Self::derive_cca_vtom(realm.ipa_width)?;
+            params.vtom = Some(vtom);
+            tracing::info!(ipa_width = realm.ipa_width, vtom, "resolved CCA REALM_CONFIG");
+            Some(CcaInitState {
+                ipa_width: realm.ipa_width,
+                vtom,
+            })
+        } else {
+            None
+        };
+
         #[cfg(guest_arch = "x86_64")]
         let cpuid = match params.isolation {
             IsolationType::Snp => cvm_cpuid::CpuidResultsIsolationType::Snp {
@@ -1664,6 +1713,8 @@ impl<'a> UhProtoPartition<'a> {
         Ok(UhProtoPartition {
             hcl,
             params,
+            #[cfg(guest_arch = "aarch64")]
+            cca_init,
             guest_vsm_available,
             create_partition_available: privs.create_partitions(),
             #[cfg(guest_arch = "x86_64")]
@@ -1690,6 +1741,8 @@ impl<'a> UhProtoPartition<'a> {
         let Self {
             mut hcl,
             params,
+            #[cfg(guest_arch = "aarch64")]
+            cca_init,
             guest_vsm_available,
             create_partition_available: _,
             #[cfg(guest_arch = "x86_64")]
@@ -1911,6 +1964,8 @@ impl<'a> UhProtoPartition<'a> {
             vtl0_user_exec_gm: late_params.vtl0_user_exec_gm,
             #[cfg(guest_arch = "x86_64")]
             cpuid,
+            #[cfg(guest_arch = "aarch64")]
+            cca_init,
             crash_notification_send: late_params.crash_notification_send,
             monitor_page: MonitorPage::new(),
             allocated_monitor_page: Mutex::new(None),
@@ -2495,4 +2550,23 @@ fn validate_vtl_gpa_flags(
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UhProtoPartition;
+
+    #[test]
+    fn vtom_derives_from_ipa_width() {
+        assert_eq!(UhProtoPartition::vtom_from_ipa_width(1), Some(1));
+        assert_eq!(UhProtoPartition::vtom_from_ipa_width(40), Some(1u64 << 39));
+        assert_eq!(UhProtoPartition::vtom_from_ipa_width(52), Some(1u64 << 51));
+        assert_eq!(UhProtoPartition::vtom_from_ipa_width(63), Some(1u64 << 62));
+    }
+
+    #[test]
+    fn vtom_rejects_invalid_ipa_width() {
+        assert_eq!(UhProtoPartition::vtom_from_ipa_width(0), None);
+        assert_eq!(UhProtoPartition::vtom_from_ipa_width(64), None);
+    }
 }

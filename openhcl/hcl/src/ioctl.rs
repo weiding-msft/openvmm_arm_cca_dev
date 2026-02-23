@@ -1807,6 +1807,12 @@ impl Hcl {
         self.mshv_hvcall.set_allowed_hypercalls(codes)
     }
 
+    /// Query CCA realm configuration via RSI.
+    #[cfg(guest_arch = "aarch64")]
+    pub fn cca_realm_config(&self, vp_index: u32) -> Result<cca::RealmConfig, cca::CcaQueryError> {
+        cca::query_realm_config(self.mshv_vtl.file.as_raw_fd(), vp_index)
+    }
+
     /// Initializes SNP register tweak bitmap
     pub fn set_snp_register_bitmap(&mut self, register_bitmap: [u8; 64]) {
         self.snp_register_bitmap = register_bitmap;
