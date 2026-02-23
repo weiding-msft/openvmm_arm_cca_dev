@@ -24,6 +24,12 @@ use hcl::ioctl::ApplyVtlProtectionsError;
 use hcl::ioctl::Mshv;
 use hcl::ioctl::MshvHvcall;
 use hcl::ioctl::MshvVtl;
+#[cfg(guest_arch = "aarch64")]
+use hcl::ioctl::cca::CcaIpaTransitionError;
+#[cfg(guest_arch = "aarch64")]
+use hcl::ioctl::cca::IpaTransitionConfig;
+#[cfg(guest_arch = "aarch64")]
+use hcl::ioctl::cca::IpaVisibility;
 use hcl::ioctl::snp::SnpPageError;
 use hv1_structs::VtlArray;
 use hvdef::HV_MAP_GPA_PERMISSIONS_ALL;
@@ -206,6 +212,51 @@ pub struct MemoryAcceptor {
 }
 
 impl MemoryAcceptor {
+    #[cfg(guest_arch = "aarch64")]
+    fn modify_gpa_visibility_cca(
+        &self,
+        host_visibility: HostVisibilityType,
+        gpns: &[u64],
+    ) -> Result<(), ModifyGpaVisibilityError> {
+        let ranges = PagedRange::new(0, gpns.len() * PagedRange::PAGE_SIZE, gpns)
+            .unwrap()
+            .ranges()
+            .map(|r| r.map(|r| MemoryRange::new(r.start..r.end)))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        let visibility = match host_visibility {
+            HostVisibilityType::SHARED => IpaVisibility::Shared,
+            HostVisibilityType::PRIVATE => IpaVisibility::Private,
+            _ => {
+                return Err(ModifyGpaVisibilityError {
+                    source: HvError::InvalidParameter,
+                    processed: 0,
+                });
+            }
+        };
+
+        hcl::ioctl::cca::transition_ipa_visibility(
+            self.mshv_vtl.as_raw_fd(),
+            0,
+            &ranges,
+            visibility,
+            IpaTransitionConfig::default(),
+        )
+        .map_err(|err| {
+            let source = match err {
+                CcaIpaTransitionError::InvalidInput => HvError::InvalidParameter,
+                CcaIpaTransitionError::Rsi(_) | CcaIpaTransitionError::NoProgress => {
+                    HvError::OperationDenied
+                }
+            };
+            ModifyGpaVisibilityError {
+                source,
+                processed: 0,
+            }
+        })
+    }
+
     /// Create a new instance.
     pub fn new(isolation: IsolationType) -> Result<Self, hcl::ioctl::Error> {
         let mshv = Mshv::new()?;
@@ -284,6 +335,11 @@ impl MemoryAcceptor {
         host_visibility: HostVisibilityType,
         gpns: &[u64],
     ) -> Result<(), ModifyGpaVisibilityError> {
+        #[cfg(guest_arch = "aarch64")]
+        if self.isolation.is_hardware_isolated() {
+            return self.modify_gpa_visibility_cca(host_visibility, gpns);
+        }
+
         self.mshv_hvcall
             .modify_gpa_visibility(host_visibility, gpns)
             .map_err(|(e, processed)| ModifyGpaVisibilityError {

@@ -692,6 +692,11 @@ pub struct MshvVtl {
 }
 
 impl MshvVtl {
+    /// Returns the raw file descriptor for the underlying `mshv_vtl` device.
+    pub fn as_raw_fd(&self) -> RawFd {
+        self.file.as_raw_fd()
+    }
+
     /// Adds the VTL0 memory as a ZONE_DEVICE memory (I/O) to support DMA from the guest.
     pub fn add_vtl0_memory(&self, mem_range: MemoryRange, shared: bool) -> Result<(), Error> {
         let flags = if shared {
