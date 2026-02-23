@@ -5,6 +5,8 @@
 //! in order to plug into the rest of the common code.
 
 pub mod mshv;
+#[cfg(guest_arch = "aarch64")]
+pub mod cca;
 mod nice;
 mod vp_state;
 
