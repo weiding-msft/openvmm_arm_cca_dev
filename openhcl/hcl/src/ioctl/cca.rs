@@ -142,7 +142,7 @@ mod tests {
         };
         let client = KernelRsiClient::with_backend(7, 42, Box::new(backend));
 
-        let input = RsiInput::new(RsiCommand::VERSION).with_arg(0, 0xAA55);
+        let input = RsiInput::new(RsiCommand::VERSION).with_arg(0, 0xAA55).unwrap();
         let _ = client.call(input).unwrap();
 
         let calls = captured.lock();

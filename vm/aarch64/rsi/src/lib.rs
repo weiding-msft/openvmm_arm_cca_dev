@@ -235,10 +235,12 @@ impl RsiInput {
     }
 
     /// Set argument at the given index (0-6 for X1-X7)
-    pub fn with_arg(mut self, index: usize, value: u64) -> Self {
-        assert!(index < 7, "Argument index must be 0-6");
+    pub fn with_arg(mut self, index: usize, value: u64) -> Result<Self, RsiError> {
+        if index >= 7 {
+            return Err(RsiError::InvalidInput);
+        }
         self.args[index] = value;
-        self
+        Ok(self)
     }
 }
 
@@ -258,9 +260,11 @@ impl RsiOutput {
     }
 
     /// Get result at the given index (0-6 for X1-X7)
-    pub fn result(&self, index: usize) -> u64 {
-        assert!(index < 7, "Result index must be 0-6");
-        self.results[index]
+    pub fn result(&self, index: usize) -> Result<u64, RsiError> {
+        if index >= 7 {
+            return Err(RsiError::InvalidInput);
+        }
+        Ok(self.results[index])
     }
 }
 
@@ -368,7 +372,7 @@ pub fn rsi_version(client: &dyn RsiClient) -> Result<(u16, u16), RsiError> {
         return Err(output.return_code.into());
     }
 
-    let version = output.result(0);
+    let version = output.result(0)?;
     let lower = (version & 0xFFFF) as u16;
     let higher = ((version >> 16) & 0xFFFF) as u16;
 
@@ -393,8 +397,8 @@ pub fn rsi_realm_config(client: &dyn RsiClient) -> Result<RealmConfig, RsiError>
         return Err(output.return_code.into());
     }
 
-    let ipa_width = output.result(0);
-    let algorithm = output.result(1);
+    let ipa_width = output.result(0)?;
+    let algorithm = output.result(1)?;
 
     if ipa_width > 52 {
         return Err(RsiError::InvalidInput);
@@ -447,10 +451,10 @@ pub fn rsi_ipa_state_set(
     }
 
     let input = RsiInput::new(RsiCommand::IPA_STATE_SET)
-        .with_arg(0, base)
-        .with_arg(1, top)
-        .with_arg(2, state as u64)
-        .with_arg(3, flags);
+        .with_arg(0, base)?
+        .with_arg(1, top)?
+        .with_arg(2, state as u64)?
+        .with_arg(3, flags)?;
 
     let output = client.call(input)?;
 
@@ -458,14 +462,14 @@ pub fn rsi_ipa_state_set(
         return Err(output.return_code.into());
     }
 
-    Ok(output.result(0))
+    output.result(0)
 }
 
 /// Get IPA state for an address
 ///
 /// Queries the state of a specific IPA.
 pub fn rsi_ipa_state_get(client: &dyn RsiClient, ipa: u64) -> Result<IpaState, RsiError> {
-    let input = RsiInput::new(RsiCommand::IPA_STATE_GET).with_arg(0, ipa);
+    let input = RsiInput::new(RsiCommand::IPA_STATE_GET).with_arg(0, ipa)?;
 
     let output = client.call(input)?;
 
@@ -473,12 +477,41 @@ pub fn rsi_ipa_state_get(client: &dyn RsiClient, ipa: u64) -> Result<IpaState, R
         return Err(output.return_code.into());
     }
 
-    match output.result(0) {
+    match output.result(0)? {
         0 => Ok(IpaState::Empty),
         1 => Ok(IpaState::Destroyed),
         2 => Ok(IpaState::Shared),
         _ => Err(RsiError::InvalidInput),
     }
+}
+
+/// Query an RSI feature value by index.
+pub fn rsi_features(client: &dyn RsiClient, feature_index: u64) -> Result<u64, RsiError> {
+    let input = RsiInput::new(RsiCommand::FEATURES).with_arg(0, feature_index)?;
+    let output = client.call(input)?;
+
+    if !output.is_success() {
+        return Err(output.return_code.into());
+    }
+
+    output.result(0)
+}
+
+/// Perform an RSI host call.
+///
+/// The input values map to X1..X7 and returned values are read from X1..X7.
+pub fn rsi_host_call(client: &dyn RsiClient, input_args: [u64; 7]) -> Result<[u64; 7], RsiError> {
+    let input = RsiInput {
+        command: RsiCommand::HOST_CALL,
+        args: input_args,
+    };
+
+    let output = client.call(input)?;
+    if !output.is_success() {
+        return Err(output.return_code.into());
+    }
+
+    Ok(output.results)
 }
 
 /// Set memory permissions for a range of addresses
@@ -503,9 +536,9 @@ pub fn rsi_mem_set_perm_index(
     }
 
     let input = RsiInput::new(RsiCommand::MEM_SET_PERM_INDEX)
-        .with_arg(0, base)
-        .with_arg(1, top)
-        .with_arg(2, perm_index as u64);
+        .with_arg(0, base)?
+        .with_arg(1, top)?
+        .with_arg(2, perm_index as u64)?;
 
     let output = client.call(input)?;
 
@@ -513,7 +546,87 @@ pub fn rsi_mem_set_perm_index(
         return Err(output.return_code.into());
     }
 
-    Ok(output.result(0))
+    output.result(0)
+}
+
+/// Get memory permission value for a permission index.
+pub fn rsi_mem_get_perm_value(client: &dyn RsiClient, perm_index: u8) -> Result<u64, RsiError> {
+    if perm_index > 15 {
+        return Err(RsiError::InvalidInput);
+    }
+
+    let input = RsiInput::new(RsiCommand::MEM_GET_PERM_VALUE).with_arg(0, perm_index as u64)?;
+    let output = client.call(input)?;
+
+    if !output.is_success() {
+        return Err(output.return_code.into());
+    }
+
+    output.result(0)
+}
+
+/// Set memory permission value for a permission index.
+pub fn rsi_mem_set_perm_value(
+    client: &dyn RsiClient,
+    perm_index: u8,
+    perm_value: u64,
+) -> Result<(), RsiError> {
+    if perm_index > 15 {
+        return Err(RsiError::InvalidInput);
+    }
+
+    let input = RsiInput::new(RsiCommand::MEM_SET_PERM_VALUE)
+        .with_arg(0, perm_index as u64)?
+        .with_arg(1, perm_value)?;
+    let output = client.call(input)?;
+
+    if !output.is_success() {
+        return Err(output.return_code.into());
+    }
+
+    Ok(())
+}
+
+/// Enter a lower privilege plane.
+pub fn rsi_plane_enter(client: &dyn RsiClient, plane_run_pa: u64) -> Result<(), RsiError> {
+    let input = RsiInput::new(RsiCommand::PLANE_ENTER).with_arg(0, plane_run_pa)?;
+    let output = client.call(input)?;
+
+    if !output.is_success() {
+        return Err(output.return_code.into());
+    }
+
+    Ok(())
+}
+
+/// Read a plane system register by encoded register ID.
+pub fn rsi_plane_sysreg_read(client: &dyn RsiClient, reg_encoding: u64) -> Result<u64, RsiError> {
+    let input = RsiInput::new(RsiCommand::PLANE_SYSREG_READ).with_arg(0, reg_encoding)?;
+    let output = client.call(input)?;
+
+    if !output.is_success() {
+        return Err(output.return_code.into());
+    }
+
+    output.result(0)
+}
+
+/// Write a plane system register by encoded register ID.
+pub fn rsi_plane_sysreg_write(
+    client: &dyn RsiClient,
+    reg_encoding: u64,
+    value: u64,
+) -> Result<(), RsiError> {
+    let input = RsiInput::new(RsiCommand::PLANE_SYSREG_WRITE)
+        .with_arg(0, reg_encoding)?
+        .with_arg(1, value)?;
+    let output = client.call(input)?;
+
+    if !output.is_success() {
+        return Err(output.return_code.into());
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -525,6 +638,10 @@ mod tests {
     struct MockRsiClient {
         version: (u16, u16),
         ipa_width: u8,
+        hash_algorithm: u64,
+        features_value: u64,
+        perm_values: [u64; 16],
+        plane_sysreg_value: u64,
         call_count: AtomicU64,
     }
 
@@ -533,6 +650,10 @@ mod tests {
             Self {
                 version: (1, 0),
                 ipa_width: 40,
+                hash_algorithm: 0,
+                features_value: 0,
+                perm_values: [0; 16],
+                plane_sysreg_value: 0,
                 call_count: AtomicU64::new(0),
             }
         }
@@ -554,11 +675,44 @@ mod tests {
                 }
                 RsiCommand::REALM_CONFIG => {
                     output.results[0] = self.ipa_width as u64;
-                    output.results[1] = 0; // SHA256
+                    output.results[1] = self.hash_algorithm;
+                }
+                RsiCommand::FEATURES => {
+                    output.results[0] = self.features_value;
                 }
                 RsiCommand::IPA_STATE_SET => {
                     output.results[0] = input.args[1]; // Return top
                 }
+                RsiCommand::HOST_CALL => {
+                    output.results = input.args;
+                }
+                RsiCommand::IPA_STATE_GET => {
+                    output.results[0] = IpaState::Shared as u64;
+                }
+                RsiCommand::MEM_SET_PERM_INDEX => {
+                    output.results[0] = input.args[1]; // Return top
+                }
+                RsiCommand::MEM_GET_PERM_VALUE => {
+                    let index = input.args[0] as usize;
+                    if index >= self.perm_values.len() {
+                        output.return_code = RsiReturnCode::ERROR_INPUT;
+                    } else {
+                        output.results[0] = self.perm_values[index];
+                    }
+                }
+                RsiCommand::MEM_SET_PERM_VALUE => {
+                    let index = input.args[0] as usize;
+                    if index >= self.perm_values.len() {
+                        output.return_code = RsiReturnCode::ERROR_INPUT;
+                    } else {
+                        output.results[0] = input.args[1];
+                    }
+                }
+                RsiCommand::PLANE_ENTER => {}
+                RsiCommand::PLANE_SYSREG_READ => {
+                    output.results[0] = self.plane_sysreg_value;
+                }
+                RsiCommand::PLANE_SYSREG_WRITE => {}
                 _ => {
                     output.return_code = RsiReturnCode::ERROR_UNKNOWN;
                 }
@@ -593,5 +747,70 @@ mod tests {
         let top = 0x2000;
         let result = rsi_ipa_state_set(&client, base, top, IpaState::Shared, 0).unwrap();
         assert_eq!(result, top);
+    }
+
+    #[test]
+    fn test_features_and_permissions() {
+        let mut client = MockRsiClient::new();
+        client.features_value = 0xfeed_beef;
+        client.perm_values[3] = 0x55aa;
+
+        assert_eq!(rsi_features(&client, 1).unwrap(), 0xfeed_beef);
+        assert_eq!(rsi_mem_get_perm_value(&client, 3).unwrap(), 0x55aa);
+        rsi_mem_set_perm_value(&client, 3, 0x1234).unwrap();
+        let top = rsi_mem_set_perm_index(&client, 0x1000, 0x3000, 3).unwrap();
+        assert_eq!(top, 0x3000);
+    }
+
+    #[test]
+    fn test_host_call_round_trip() {
+        let client = MockRsiClient::new();
+        let input = [1, 2, 3, 4, 5, 6, 7];
+        let output = rsi_host_call(&client, input).unwrap();
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn test_ipa_state_get_and_plane_sysreg() {
+        let mut client = MockRsiClient::new();
+        client.plane_sysreg_value = 0xabcd;
+
+        assert_eq!(rsi_ipa_state_get(&client, 0x1000).unwrap(), IpaState::Shared);
+        assert_eq!(rsi_plane_sysreg_read(&client, 0x10).unwrap(), 0xabcd);
+        rsi_plane_sysreg_write(&client, 0x10, 0x99).unwrap();
+        rsi_plane_enter(&client, 0x10000).unwrap();
+    }
+
+    #[test]
+    fn test_invalid_inputs() {
+        let client = MockRsiClient::new();
+
+        assert!(matches!(
+            RsiInput::new(RsiCommand::VERSION).with_arg(7, 1),
+            Err(RsiError::InvalidInput)
+        ));
+
+        let output = RsiOutput {
+            return_code: RsiReturnCode::SUCCESS,
+            results: [0; 7],
+        };
+        assert_eq!(output.result(7), Err(RsiError::InvalidInput));
+
+        assert_eq!(rsi_ipa_state_set(&client, 0x2000, 0x1000, IpaState::Shared, 0), Err(RsiError::InvalidInput));
+        assert_eq!(rsi_mem_set_perm_index(&client, 0x1000, 0x2000, 16), Err(RsiError::InvalidInput));
+        assert_eq!(rsi_mem_get_perm_value(&client, 16), Err(RsiError::InvalidInput));
+        assert_eq!(rsi_mem_set_perm_value(&client, 16, 0), Err(RsiError::InvalidInput));
+    }
+
+    #[test]
+    fn test_realm_config_invalid_values() {
+        let mut client = MockRsiClient::new();
+
+        client.ipa_width = 53;
+        assert!(matches!(rsi_realm_config(&client), Err(RsiError::InvalidInput)));
+
+        client.ipa_width = 40;
+        client.hash_algorithm = 2;
+        assert!(matches!(rsi_realm_config(&client), Err(RsiError::InvalidInput)));
     }
 }
