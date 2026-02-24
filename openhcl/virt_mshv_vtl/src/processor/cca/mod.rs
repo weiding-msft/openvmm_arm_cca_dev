@@ -9,9 +9,11 @@
 //! It is feature-gated and not wired into default processor selection.
 
 mod exceptions;
+mod state;
 
 use hcl::protocol;
 use hcl::protocol::cca_rsi_plane_exit_reason;
+use state::CcaVpState;
 use thiserror::Error;
 
 /// Backend abstraction used by the CCA run loop to enter the lower plane.
@@ -73,12 +75,16 @@ pub enum CcaRunLoopError {
     /// Data-abort MMIO access width is unsupported.
     #[error("unsupported MMIO access size {0}")]
     UnsupportedMmioAccessSize(u8),
+    /// Minimal state validation failed.
+    #[error("invalid CCA VP state: {0}")]
+    InvalidState(&'static str),
 }
 
 /// CCA run-loop skeleton state.
 pub struct CcaRunLoop<B: PlaneEnterBackend> {
     backend: B,
     run: protocol::cca_rsi_plane_run,
+    state: CcaVpState,
 }
 
 impl<B: PlaneEnterBackend> CcaRunLoop<B> {
@@ -87,14 +93,22 @@ impl<B: PlaneEnterBackend> CcaRunLoop<B> {
         Self {
             backend,
             run: protocol::cca_rsi_plane_run::default(),
+            state: CcaVpState::default(),
         }
     }
 
     /// Executes a single run-loop iteration.
     pub fn run_once(&mut self, mmio: &mut impl MmioBus) -> Result<DispatchExit, CcaRunLoopError> {
-        self.prepare_entry();
+        self.prepare_entry()?;
         self.plane_enter()?;
-        self.dispatch_exit(mmio)
+        self.state.capture_from_exit(&self.run.exit);
+        self.run.entry.gprs = self.run.exit.gprs;
+        self.run.entry.gicv3_hcr = self.run.exit.gicv3_hcr;
+        self.run.entry.gicv3_lrs = self.run.exit.gicv3_lrs;
+
+        let exit = self.dispatch_exit(mmio)?;
+        self.state.capture_from_entry(&self.run.entry)?;
+        Ok(exit)
     }
 
     /// Mutable access to the shared run structure.
@@ -107,9 +121,11 @@ impl<B: PlaneEnterBackend> CcaRunLoop<B> {
         &self.run
     }
 
-    fn prepare_entry(&mut self) {
+    fn prepare_entry(&mut self) -> Result<(), CcaRunLoopError> {
         // Entry setup for follow-up PRs (state save/restore and controls).
+        self.state.restore_for_entry(&mut self.run.entry)?;
         self.run.entry.flags = 0;
+        Ok(())
     }
 
     fn plane_enter(&mut self) -> Result<(), CcaRunLoopError> {
@@ -257,6 +273,99 @@ mod tests {
                 }) if s == size
             ));
             assert_eq!(loop_state.run_state().entry.pc, 0x1004);
+        }
+    }
+
+    struct ContinuityBackend {
+        iteration: usize,
+        expected_pc: u64,
+        expected_x0: u64,
+        expected_hcr: u64,
+        expected_lr0: u64,
+    }
+
+    impl PlaneEnterBackend for ContinuityBackend {
+        fn plane_enter(
+            &mut self,
+            run: &mut protocol::cca_rsi_plane_run,
+        ) -> Result<(), CcaRunLoopError> {
+            assert_eq!(run.entry.pc, self.expected_pc);
+            assert_eq!(run.entry.gprs[0], self.expected_x0);
+            assert_eq!(run.entry.gicv3_hcr, self.expected_hcr);
+            assert_eq!(run.entry.gicv3_lrs[0], self.expected_lr0);
+
+            run.exit.exit_reason = cca_rsi_plane_exit_reason::SYNC.0;
+            run.exit.esr_el2 = make_data_abort_esr(false, 0, 8);
+            run.exit.far_el2 = 0x3000_0000;
+            run.exit.hpfar_el2 = (0x3000_0000 & !0xfffu64) >> 8;
+            run.exit.gprs = run.entry.gprs;
+            run.exit.gicv3_hcr = self.expected_hcr.wrapping_add(1);
+            run.exit.gicv3_lrs[0] = self.expected_lr0.wrapping_add(1);
+
+            let next_iteration = self.iteration + 1;
+            self.expected_x0 = (next_iteration as u64) * 0x11;
+            self.iteration = next_iteration;
+            self.expected_pc = self.expected_pc.wrapping_add(4);
+            self.expected_hcr = self.expected_hcr.wrapping_add(1);
+            self.expected_lr0 = self.expected_lr0.wrapping_add(1);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn context_state_is_continuous_across_iterations() {
+        let mmio_values = [
+            0x11u64,
+            0x22u64,
+            0x33u64,
+            0x44u64,
+            0x55u64,
+            0x66u64,
+            0x77u64,
+            0x88u64,
+        ];
+
+        #[derive(Default)]
+        struct SeqMmio {
+            values: std::collections::VecDeque<u64>,
+        }
+
+        impl MmioBus for SeqMmio {
+            fn mmio_read(&mut self, _address: u64, data: &mut [u8]) {
+                let value = self.values.pop_front().unwrap();
+                let bytes = value.to_le_bytes();
+                data.copy_from_slice(&bytes[..data.len()]);
+            }
+
+            fn mmio_write(&mut self, _address: u64, _data: &[u8]) {}
+        }
+
+        let backend = ContinuityBackend {
+            iteration: 0,
+            expected_pc: 0x4000,
+            expected_x0: 0,
+            expected_hcr: 0,
+            expected_lr0: 0,
+        };
+
+        let mut run_loop = CcaRunLoop::new(backend);
+        run_loop.run_state_mut().entry.pc = 0x4000;
+        let mut mmio = SeqMmio {
+            values: mmio_values.into(),
+        };
+
+        for expected in [0x11u64, 0x22, 0x33, 0x44, 0x55] {
+            let exit = run_loop.run_once(&mut mmio).unwrap();
+            assert!(matches!(
+                exit,
+                DispatchExit::Sync(SyncExit::DataAbortMmio {
+                    is_write: false,
+                    size: 8,
+                    register_index: 0,
+                    ..
+                })
+            ));
+            assert_eq!(run_loop.run_state().entry.gprs[0], expected);
         }
     }
 }
