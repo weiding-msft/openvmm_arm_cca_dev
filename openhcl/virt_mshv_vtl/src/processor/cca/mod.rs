@@ -31,9 +31,18 @@ pub enum DispatchExit {
     /// Synchronous exit that must be handled by exception dispatch.
     Sync(SyncExit),
     /// IRQ exit path.
-    Irq,
+    Irq(InterruptExit),
     /// FIQ exit path.
-    Fiq,
+    Fiq(InterruptExit),
+}
+
+/// Interrupt-related payload returned on IRQ/FIQ exits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InterruptExit {
+    /// GICv3 maintenance status.
+    pub gicv3_misr: u64,
+    /// GICv3 virtual machine control state.
+    pub gicv3_vmcr: u64,
 }
 
 /// Minimal synchronous-exit payload used by the run-loop skeleton.
@@ -137,8 +146,14 @@ impl<B: PlaneEnterBackend> CcaRunLoop<B> {
             cca_rsi_plane_exit_reason::SYNC => Ok(DispatchExit::Sync(
                 exceptions::dispatch_sync_exit(&mut self.run, mmio)?,
             )),
-            cca_rsi_plane_exit_reason::IRQ => Ok(DispatchExit::Irq),
-            cca_rsi_plane_exit_reason::FIQ => Ok(DispatchExit::Fiq),
+            cca_rsi_plane_exit_reason::IRQ => Ok(DispatchExit::Irq(InterruptExit {
+                gicv3_misr: self.run.exit.gicv3_misr,
+                gicv3_vmcr: self.run.exit.gicv3_vmcr,
+            })),
+            cca_rsi_plane_exit_reason::FIQ => Ok(DispatchExit::Fiq(InterruptExit {
+                gicv3_misr: self.run.exit.gicv3_misr,
+                gicv3_vmcr: self.run.exit.gicv3_vmcr,
+            })),
             _ => Err(CcaRunLoopError::UnexpectedExitReason(
                 self.run.exit.exit_reason,
             )),
@@ -175,6 +190,8 @@ mod tests {
         far_el2: u64,
         hpfar_el2: u64,
         gpr_value: u64,
+        gicv3_misr: u64,
+        gicv3_vmcr: u64,
     }
 
     impl PlaneEnterBackend for MockBackend {
@@ -187,6 +204,8 @@ mod tests {
             run.exit.far_el2 = self.far_el2;
             run.exit.hpfar_el2 = self.hpfar_el2;
             run.exit.gprs[0] = self.gpr_value;
+            run.exit.gicv3_misr = self.gicv3_misr;
+            run.exit.gicv3_vmcr = self.gicv3_vmcr;
             Ok(())
         }
     }
@@ -224,6 +243,8 @@ mod tests {
             far_el2: far,
             hpfar_el2: hpfar,
             gpr_value: 0x8877_6655_4433_2211,
+            gicv3_misr: 0,
+            gicv3_vmcr: 0,
         };
 
         let mut loop_state = CcaRunLoop::new(backend);
@@ -367,5 +388,59 @@ mod tests {
             ));
             assert_eq!(run_loop.run_state().entry.gprs[0], expected);
         }
+    }
+
+    #[test]
+    fn irq_exit_reports_interrupt_payload() {
+        let backend = MockBackend {
+            exit_reason: cca_rsi_plane_exit_reason::IRQ.0,
+            esr_el2: 0,
+            far_el2: 0,
+            hpfar_el2: 0,
+            gpr_value: 0,
+            gicv3_misr: 0x55,
+            gicv3_vmcr: 0xaa,
+        };
+
+        let mut run_loop = CcaRunLoop::new(backend);
+        run_loop.run_state_mut().entry.pc = 0x8000;
+        let mut mmio = MockMmio::default();
+        let exit = run_loop.run_once(&mut mmio).unwrap();
+
+        assert_eq!(
+            exit,
+            DispatchExit::Irq(InterruptExit {
+                gicv3_misr: 0x55,
+                gicv3_vmcr: 0xaa,
+            })
+        );
+        assert_eq!(run_loop.run_state().entry.pc, 0x8000);
+    }
+
+    #[test]
+    fn fiq_exit_reports_interrupt_payload() {
+        let backend = MockBackend {
+            exit_reason: cca_rsi_plane_exit_reason::FIQ.0,
+            esr_el2: 0,
+            far_el2: 0,
+            hpfar_el2: 0,
+            gpr_value: 0,
+            gicv3_misr: 0x1234,
+            gicv3_vmcr: 0x5678,
+        };
+
+        let mut run_loop = CcaRunLoop::new(backend);
+        run_loop.run_state_mut().entry.pc = 0x9000;
+        let mut mmio = MockMmio::default();
+        let exit = run_loop.run_once(&mut mmio).unwrap();
+
+        assert_eq!(
+            exit,
+            DispatchExit::Fiq(InterruptExit {
+                gicv3_misr: 0x1234,
+                gicv3_vmcr: 0x5678,
+            })
+        );
+        assert_eq!(run_loop.run_state().entry.pc, 0x9000);
     }
 }
