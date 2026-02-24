@@ -81,6 +81,10 @@ rustflags = [
   "-Ctarget-feature=+lse,+neon",
 ]
 
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+ar = "aarch64-linux-gnu-gcc-ar"
+
 [target.'cfg(target_env = "musl")']
 rustflags = [
   # Use the musl from the sysroot, not from the Rust distribution.

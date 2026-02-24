@@ -10,7 +10,7 @@
         "ghcr.io/devcontainers/features/rust:1": {
             "version": "latest",
             "profile": "default",
-            "targets": "aarch64-apple-darwin,aarch64-unknown-linux-musl,x86_64-pc-windows-msvc,x86_64-unknown-linux-gnu,x86_64-unknown-linux-musl,x86_64-unknown-none"
+            "targets": "aarch64-apple-darwin,aarch64-unknown-linux-musl,aarch64-unknown-linux-gnu,x86_64-pc-windows-msvc,x86_64-unknown-linux-gnu,x86_64-unknown-linux-musl,x86_64-unknown-none"
         },
 
         // Add the SSHD feature so that users can SSH into the container.
@@ -35,7 +35,9 @@
 
     // Set the minimum host cpus to 8, since otherwise builds or rust-analyzer
     // will not work well.
-    "hostRequirements": { "cpus": 8 }
+    "hostRequirements": { "cpus": 8 },
 
     // TODO: mounts for local flowey-out/artifacts?
+    // run once after container create to install system cross toolchain and add rust target for the vscode user
+    "postCreateCommand": "apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu g++-aarch64-linux-gnu qemu-user-static libc6-dev-arm64-cross && su vscode -lc \"~/.cargo/bin/rustup target add aarch64-unknown-linux-gnu\""
 }
