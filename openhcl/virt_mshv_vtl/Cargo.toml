@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [features]
 gdb = []
+cca_processor = []
 
 [target.'cfg(target_os = "linux")'.dependencies]
 aarch64emu.workspace = true
