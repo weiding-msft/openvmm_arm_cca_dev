@@ -121,6 +121,14 @@ pub enum CcaQueryError {
     Rsi(RsiError),
 }
 
+/// Errors from issuing RSI PLANE_ENTER.
+#[derive(Debug, Error)]
+pub enum CcaPlaneEnterError {
+    /// RSI PLANE_ENTER returned an error.
+    #[error("RSI PLANE_ENTER failed: {0}")]
+    Rsi(RsiError),
+}
+
 /// Query RSI REALM_CONFIG through the kernel RSI adapter.
 pub fn query_realm_config(fd: RawFd, vp_index: u32) -> Result<RealmConfig, CcaQueryError> {
     let client = KernelRsiClient::new(fd, vp_index);
@@ -129,6 +137,24 @@ pub fn query_realm_config(fd: RawFd, vp_index: u32) -> Result<RealmConfig, CcaQu
     Ok(RealmConfig {
         ipa_width: config.ipa_width,
     })
+}
+
+/// Enter the lower CCA plane once through RSI_PLANE_ENTER.
+pub fn plane_enter(
+    fd: RawFd,
+    vp_index: u32,
+    plane_run_pa: u64,
+) -> Result<(), CcaPlaneEnterError> {
+    let client = KernelRsiClient::new(fd, vp_index);
+    rsi::rsi_plane_enter(&client, plane_run_pa).map_err(CcaPlaneEnterError::Rsi)
+}
+
+#[cfg(test)]
+fn plane_enter_with_client(
+    client: &dyn RsiClient,
+    plane_run_pa: u64,
+) -> Result<(), CcaPlaneEnterError> {
+    rsi::rsi_plane_enter(client, plane_run_pa).map_err(CcaPlaneEnterError::Rsi)
 }
 
 /// Memory visibility transition target for RSI IPA state changes.
@@ -320,6 +346,40 @@ mod tests {
 
         let err = client.call(RsiInput::new(RsiCommand::VERSION)).unwrap_err();
         assert_eq!(err, RsiError::RsiError(RsiReturnCode::ERROR_DEVICE));
+    }
+
+    #[test]
+    fn plane_enter_packs_command_and_pa_argument() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let backend = MockBackend {
+            captured: captured.clone(),
+            result_code: RsiReturnCode::SUCCESS.0,
+            results: [0; 7],
+            fail: false,
+        };
+        let client = KernelRsiClient::with_backend(7, 42, Box::new(backend));
+
+        plane_enter_with_client(&client, 0x1234_5000).unwrap();
+
+        let calls = captured.lock();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].vp_index, 42);
+        assert_eq!(calls[0].command, RsiCommand::PLANE_ENTER.0.into());
+        assert_eq!(calls[0].args[0], 0x1234_5000);
+    }
+
+    #[test]
+    fn plane_enter_propagates_rsi_error() {
+        let backend = MockBackend {
+            captured: Arc::new(Mutex::new(Vec::new())),
+            result_code: RsiReturnCode::ERROR_INPUT.0,
+            results: [0; 7],
+            fail: false,
+        };
+        let client = KernelRsiClient::with_backend(3, 1, Box::new(backend));
+
+        let err = plane_enter_with_client(&client, 0x1000).unwrap_err();
+        assert!(matches!(err, CcaPlaneEnterError::Rsi(_)));
     }
 
     struct MockRsiClient {

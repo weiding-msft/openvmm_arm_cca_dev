@@ -14,6 +14,7 @@ mod state;
 use hcl::protocol;
 use hcl::protocol::cca_rsi_plane_exit_reason;
 use state::CcaVpState;
+use std::os::fd::RawFd;
 use thiserror::Error;
 
 /// Backend abstraction used by the CCA run loop to enter the lower plane.
@@ -23,6 +24,34 @@ pub trait PlaneEnterBackend {
         &mut self,
         run: &mut protocol::cca_rsi_plane_run,
     ) -> Result<(), CcaRunLoopError>;
+}
+
+/// Kernel-backed plane-enter implementation that issues RSI_PLANE_ENTER.
+pub struct KernelPlaneEnterBackend {
+    fd: RawFd,
+    vp_index: u32,
+    plane_run_pa: u64,
+}
+
+impl KernelPlaneEnterBackend {
+    /// Creates a new kernel-backed plane-enter backend.
+    pub fn new(fd: RawFd, vp_index: u32, plane_run_pa: u64) -> Self {
+        Self {
+            fd,
+            vp_index,
+            plane_run_pa,
+        }
+    }
+}
+
+impl PlaneEnterBackend for KernelPlaneEnterBackend {
+    fn plane_enter(
+        &mut self,
+        _run: &mut protocol::cca_rsi_plane_run,
+    ) -> Result<(), CcaRunLoopError> {
+        hcl::ioctl::cca::plane_enter(self.fd, self.vp_index, self.plane_run_pa)
+            .map_err(|_| CcaRunLoopError::PlaneEnter)
+    }
 }
 
 /// Result of dispatching a CCA plane exit.
@@ -442,5 +471,11 @@ mod tests {
             })
         );
         assert_eq!(run_loop.run_state().entry.pc, 0x9000);
+    }
+
+    #[test]
+    fn kernel_backend_constructor_is_reachable() {
+        let _ = KernelPlaneEnterBackend::new(-1, 0, 0);
+        let _ = CcaRunLoopError::PlaneEnter;
     }
 }
