@@ -58,6 +58,11 @@ struct Options {
     /// for example.
     #[clap(long)]
     disable_offloads: bool,
+    /// Partition isolation mode.
+    ///
+    /// This is only used with `--hv mshv-vtl`.
+    #[clap(long, value_enum, default_value_t = IsolationOpt::None)]
+    isolation: IsolationOpt,
     /// The path to the TMK binary.
     #[clap(long)]
     tmk: PathBuf,
@@ -89,6 +94,34 @@ enum HypervisorOpt {
     Hvf,
 }
 
+#[derive(clap::ValueEnum, Copy, Clone, Debug, Eq, PartialEq)]
+enum IsolationOpt {
+    /// No isolation.
+    None,
+    /// Hypervisor-backed isolation.
+    Vbs,
+    /// ARM CCA hardware-backed isolation.
+    #[cfg(guest_arch = "aarch64")]
+    Cca,
+    /// Hardware-backed isolation.
+    Snp,
+    /// Hardware-backed isolation.
+    Tdx,
+}
+
+impl IsolationOpt {
+    const fn to_virt(self) -> virt::IsolationType {
+        match self {
+            IsolationOpt::None => virt::IsolationType::None,
+            IsolationOpt::Vbs => virt::IsolationType::Vbs,
+            #[cfg(guest_arch = "aarch64")]
+            IsolationOpt::Cca => virt::IsolationType::Snp,
+            IsolationOpt::Snp => virt::IsolationType::Snp,
+            IsolationOpt::Tdx => virt::IsolationType::Tdx,
+        }
+    }
+}
+
 async fn do_main(driver: DefaultDriver) -> anyhow::Result<()> {
     let opts = Options::parse();
 
@@ -104,6 +137,12 @@ async fn do_main(driver: DefaultDriver) -> anyhow::Result<()> {
             Some(hv) => hv,
             None => choose_hypervisor()?,
         };
+        let isolation = opts.isolation.to_virt();
+        #[cfg(target_os = "linux")]
+        if !matches!(hv, HypervisorOpt::MshvVtl) && !matches!(isolation, virt::IsolationType::None)
+        {
+            anyhow::bail!("--isolation is only supported with --hv mshv-vtl");
+        }
         let mut state = CommonState::new(driver, opts).await?;
 
         state
@@ -114,9 +153,7 @@ async fn do_main(driver: DefaultDriver) -> anyhow::Result<()> {
                 HypervisorOpt::Mshv => state.run_host_vmm(virt_mshv::LinuxMshv, test).await,
                 #[cfg(target_os = "linux")]
                 HypervisorOpt::MshvVtl => {
-                    state
-                        .run_paravisor_vmm(virt::IsolationType::None, test)
-                        .await
+                    state.run_paravisor_vmm(isolation, test).await
                 }
                 #[cfg(windows)]
                 HypervisorOpt::Whp => state.run_host_vmm(virt_whp::Whp, test).await,
